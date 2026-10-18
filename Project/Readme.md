@@ -17,7 +17,7 @@ Each module (transmission task) receives the signal from sensor through I2C, the
 HMI receives through a queue all the data from all the modules, and with ID will identify which module is the owner.
 Set ON/OFF and bomba (receptor task) will receive data from HMI and send control signal to actuators
 
-- *HMI interaction* <BR><img src="./Imagen1.jpeg" width="640" />
+- *HMI interaction* <BR><img src="./Imagen1.png" width="640" />
 
 ## Device
 
@@ -32,7 +32,7 @@ STM32CubeIDE
 
 ## Run and Test
 
-- *Terminal output* <BR><img src="./Modulos_app_STM_FreeRts.jpeg" width="640" />
+
 
 ## References
 
