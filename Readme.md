@@ -1,11 +1,11 @@
 # FreeRTOS examples 
 
-This code example shows how 
+This code example shows how interact 3 tasks running with different priorities 
 
 
 ## Device
 
-The deive used in this code example  (CE) is
+The device used in this code example  (CE) is
 
 - STM32F411
 
