@@ -6,685 +6,606 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2023 STMicroelectronics.
+  * Copyright (c) 2025 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
   ******************************************************************************
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
-#include "usb_host.h"
+#include "queue.h"
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-
-/* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
+#include "SysInit.h"
 
 /* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
+#define  CLEAR_BUFFER_CH 0 //'0'
+#define TAM 16
 
 /* Private variables ---------------------------------------------------------*/
-CRC_HandleTypeDef hcrc;
-
-DMA2D_HandleTypeDef hdma2d;
-
-I2C_HandleTypeDef hi2c3;
-
-LTDC_HandleTypeDef hltdc;
-
-SPI_HandleTypeDef hspi5;
-
-TIM_HandleTypeDef htim1;
+I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2;
 
 UART_HandleTypeDef huart1;
 
-SDRAM_HandleTypeDef hsdram1;
+/* Definitions for SendTask_Temp */
+osThreadId_t SendTask_TempHandle;
+const osThreadAttr_t SendTask_Temp_attributes = {
+  .name = "SendTask_Temp",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for SendTask_Caudal */
+osThreadId_t SendTask_CaudalHandle;
+const osThreadAttr_t SendTask_Caudal_attributes = {
+  .name = "SendTask_Caudal",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityHigh4,
+};
+/* Definitions for SendTask_Ph */
+osThreadId_t SendTask_PhHandle;
+const osThreadAttr_t SendTask_Ph_attributes = {
+  .name = "SendTask_Ph",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityRealtime,
+};
+/* Definitions for ReceivTask_HMI */
+osThreadId_t ReceivTask_HMIHandle;
+const osThreadAttr_t ReceivTask_HMI_attributes = {
+  .name = "ReceivTask_HMI",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for SendTask_Conduc */
+osThreadId_t SendTask_ConducHandle;
+const osThreadAttr_t SendTask_Conduc_attributes = {
+  .name = "SendTask_Conduc",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityHigh7,
+};
+/* Definitions for SendTask_Redox */
+osThreadId_t SendTask_RedoxHandle;
+const osThreadAttr_t SendTask_Redox_attributes = {
+  .name = "SendTask_Redox",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityHigh5,
+};
+/* Definitions for SendTask_Humed */
+osThreadId_t SendTask_HumedHandle;
+const osThreadAttr_t SendTask_Humed_attributes = {
+  .name = "SendTask_Humed",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
 
-osThreadId defaultTaskHandle;
+/* Definitions for Cyclic_ErrorHan */
+osThreadId_t Cyclic_ErrorHanHandle;
+const osThreadAttr_t Cyclic_ErrorHan_attributes = {
+  .name = "Cyclic_ErrorHan",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityRealtime3,
+};
+
+/* Definitions for myQueue01 */
+osMessageQueueId_t myQueue01Handle;
+const osMessageQueueAttr_t myQueue01_attributes = {
+  .name = "myQueue01"
+};
 /* USER CODE BEGIN PV */
+typedef enum
+{
+	eSender1_Ph,
+	eSender2_Temp,
+	eSender3_Caudal,
+	eSender4_Conduct,
+	eSender5_Redox,
+	eSender6_Humed
+} DataSource_t;
 
+typedef struct
+{
+	//uint32_t u32Value;
+	uint8_t u8QUE_TxBufer[TAM];
+	DataSource_t eDataSource;
+} Data_t;
+
+static  Data_t xStructsToSend[ 6 ] =
+{
+	{ "0.0", eSender1_Ph }, /* Used by Sender1 Ph. */
+	{ "0.0", eSender2_Temp }, /* Used by Sender2 Temperature. */
+	{ "0.0", eSender3_Caudal }, /* Used by Sender3 Caudal */
+	{ "0.0", eSender4_Conduct }, /* Used by Sender4 Conduct */
+	{ "0.0", eSender5_Redox }, /* Used by Sender5 Redox */
+	{ "0.0", eSender6_Humed }, /* Used by Sender5 Humed */
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
-void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_CRC_Init(void);
-static void MX_DMA2D_Init(void);
-static void MX_FMC_Init(void);
-static void MX_I2C3_Init(void);
-static void MX_LTDC_Init(void);
-static void MX_SPI5_Init(void);
-static void MX_TIM1_Init(void);
-static void MX_USART1_UART_Init(void);
-void StartDefaultTask(void const * argument);
 
-/* USER CODE BEGIN PFP */
+void vSendTask_Ph(void *argument);
+void vSendTask_Temp(void *argument);
+void vSendTask_Conduct(void *argument);
+void vSendTask_Caudal(void *argument);
+void vSendTask_Redox(void *argument);
+void vSendTask_Humed(void *argument);
 
-/* USER CODE END PFP */
+void vCyclic_ErrorHan(void *argument);
+void vReceivTask_HMI(void *argument);
 
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
+static const uint8_t TMP100_ADDR = 0x64 << 1; // Use 7-bit address
+static const uint8_t TMP102_ADDR = 0x66 << 1; // Use 7-bit address
 
-/* USER CODE END 0 */
-
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
 int main(void)
 {
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_CRC_Init();
-  MX_DMA2D_Init();
-  MX_FMC_Init();
-  MX_I2C3_Init();
-  MX_LTDC_Init();
-  MX_SPI5_Init();
-  MX_TIM1_Init();
-  MX_USART1_UART_Init();
-  /* USER CODE BEGIN 2 */
+	SI_vInitSystem(&huart1, &hi2c1, &hi2c2);
 
-  /* USER CODE END 2 */
+  /* creation of myQueue01 */
+  myQueue01Handle = osMessageQueueNew (128, sizeof(Data_t), &myQueue01_attributes);
 
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
+  /* creation of SendTask_Temp */
+  SendTask_TempHandle = osThreadNew(vSendTask_Temp, &(xStructsToSend[1]), &SendTask_Temp_attributes);
 
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
+  /* creation of SendTask_Ph */
+  SendTask_PhHandle = osThreadNew(vSendTask_Ph, &(xStructsToSend[0]), &SendTask_Ph_attributes);
 
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
+  /* creation of SendTask_Caudal */
+  SendTask_CaudalHandle = osThreadNew(vSendTask_Caudal, &(xStructsToSend[2]), &SendTask_Caudal_attributes);
 
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
+  /* creation of SendTask_Conduct */
+  SendTask_ConducHandle = osThreadNew(vSendTask_Conduct, &(xStructsToSend[3]), &SendTask_Conduc_attributes);
 
-  /* Create the thread(s) */
-  /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 4096);
-  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+  /* creation of SendTask_Redox */
+  SendTask_RedoxHandle = osThreadNew(vSendTask_Redox, &(xStructsToSend[4]), &SendTask_Redox_attributes);
 
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
+  /* creation of SendTask_Humed */
+  SendTask_HumedHandle = osThreadNew(vSendTask_Humed, &(xStructsToSend[5]), &SendTask_Humed_attributes);
+
+  /* creation of Cyclic_ErrorHan */
+  Cyclic_ErrorHanHandle = osThreadNew(vCyclic_ErrorHan, NULL, &Cyclic_ErrorHan_attributes);
+
+  /* creation of ReceivTask_HMI */
+  ReceivTask_HMIHandle = osThreadNew(vReceivTask_HMI, NULL, &ReceivTask_HMI_attributes);
 
   /* Start scheduler */
   osKernelStart();
 
-  /* We should never get here as control is now taken by the scheduler */
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
+  while (1){
   }
-  /* USER CODE END 3 */
 }
 
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
+
+/* USER CODE END Header_StartTask03 */
+void vSendTask_Temp(void *argument)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+	TickType_t xLastWakeTime;
+	const TickType_t xDelay1000ms = pdMS_TO_TICKS( 1000 );
+	BaseType_t xStatus;
+	uint8_t u8QUE_TxBuf[TAM] = {0};
 
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+	xLastWakeTime = xTaskGetTickCount();
+	memset(u8QUE_TxBuf,CLEAR_BUFFER_CH, TAM);
 
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 72;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 3;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+	memcpy(u8QUE_TxBuf," Temperature", TAM);
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+	u8QUE_TxBuf[TAM - 2] = 13;
+	u8QUE_TxBuf[TAM - 1] = '\n';
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
+	for(;;)
+	{
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
+
+	  memcpy(xStructsToSend[1].u8QUE_TxBufer, u8QUE_TxBuf, TAM);
+
+	  //xStatus = xQueueOverwrite( myQueue01Handle, argument);
+	  xStatus = xQueueSendToBack( myQueue01Handle, argument, xDelay1000ms );
+
+	  vTaskDelayUntil( &xLastWakeTime, xDelay1000ms );
+
+	  if( xStatus != pdPASS )
+	  {
+	  /* The send operation could not complete because the queue was full -
+	  this must be an error as the queue should never contain more than
+	  one item! */
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Could not send to the queue.\r\n",strlen("Could not send to the queue.\r\n"),100);
+		//HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
+	  }
+	  else{
+		  //HAL_UART_Transmit(&huart1, (uint8_t*)"Temperature was sending correctly.\r\n",strlen("Was sending correctly.\r\n"),100);
+	  }
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 0); // 0 turn Off
+	}
 }
 
-/**
-  * @brief CRC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_CRC_Init(void)
+/* USER CODE END Header_StartTask02 */
+void vSendTask_Ph(void *argument)
 {
+	TickType_t xLastWakeTime;
+	const TickType_t xDelay386ms = pdMS_TO_TICKS( 386 ); //with 260 receives 254 (still processing), 384 works ok
+	BaseType_t xStatus;
+	uint8_t u8QUE_TxBuf[TAM] = {0};
 
-  /* USER CODE BEGIN CRC_Init 0 */
+	uint8_t u8I2C_RX_Buf_100[TAM] = {0}; // DATA to receive by I2C address = 100
+	uint8_t u8I2C_TX_Buffer[2] = {82,13};  //Request\r
 
-  /* USER CODE END CRC_Init 0 */
+	HAL_StatusTypeDef StatusI2C = HAL_BUSY;
 
-  /* USER CODE BEGIN CRC_Init 1 */
+	//uint8_t u8I2C_RxBuf[TAM] = "1_23.289";
 
-  /* USER CODE END CRC_Init 1 */
-  hcrc.Instance = CRC;
-  if (HAL_CRC_Init(&hcrc) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN CRC_Init 2 */
+	xLastWakeTime = xTaskGetTickCount();
+	memset(u8QUE_TxBuf,CLEAR_BUFFER_CH, TAM);
 
-  /* USER CODE END CRC_Init 2 */
+	memset(u8I2C_RX_Buf_100,CLEAR_BUFFER_CH, TAM);
 
+	for(;;)
+	{
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, 1); // 0 turn ON
+		if(HAL_I2C_Master_Transmit(&hi2c1,TMP100_ADDR,u8I2C_TX_Buffer,1,1000)!= HAL_OK)
+		{
+			Error_Handler();
+		}
+
+		memset(u8I2C_RX_Buf_100,CLEAR_BUFFER_CH, TAM);
+
+		vTaskDelayUntil( &xLastWakeTime, xDelay386ms ); //here goes to block state
+
+		StatusI2C = HAL_I2C_Master_Receive(&hi2c1 ,TMP100_ADDR, (uint8_t *)u8I2C_RX_Buf_100, 8,1000);
+
+		if(StatusI2C == HAL_BUSY)
+		{
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, 1); // turn ON
+			Error_Handler();
+		}
+		else{
+			if(StatusI2C == HAL_TIMEOUT)
+			{
+				HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // turn ON
+				Error_Handler();
+			}
+		}
+		memcpy(xStructsToSend[0].u8QUE_TxBufer, u8I2C_RX_Buf_100, TAM);
+
+		xStatus = xQueueSendToBack( myQueue01Handle, argument, xDelay386ms );
+
+		if( xStatus != pdPASS )
+		{
+		/* The send operation could not complete because the queue was full - this must be an error as
+		* the queue should never contain more than one item! */
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Could not send to the queue.\r\n",strlen("Could not send to the queue.\r\n"),100);
+		//HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, 1); // 0 turn ON
+		}
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, 0); // 0 turn Off
+	}
 }
 
-/**
-  * @brief DMA2D Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_DMA2D_Init(void)
+void vSendTask_Conduct(void *argument)
 {
+	TickType_t xLastWakeTime;
+	const TickType_t xDelay386ms = pdMS_TO_TICKS( 386 );
+	BaseType_t xStatus;
+	uint8_t u8QUE_TxBuf[TAM] = {0};
 
-  /* USER CODE BEGIN DMA2D_Init 0 */
+	xLastWakeTime = xTaskGetTickCount();
+	memset(u8QUE_TxBuf,CLEAR_BUFFER_CH, TAM);
 
-  /* USER CODE END DMA2D_Init 0 */
+	memcpy(u8QUE_TxBuf," Conduct", sizeof("Conduct"));
 
-  /* USER CODE BEGIN DMA2D_Init 1 */
+	u8QUE_TxBuf[TAM - 2] = 13;
+	u8QUE_TxBuf[TAM - 1] = '\n';
 
-  /* USER CODE END DMA2D_Init 1 */
-  hdma2d.Instance = DMA2D;
-  hdma2d.Init.Mode = DMA2D_M2M;
-  hdma2d.Init.ColorMode = DMA2D_OUTPUT_ARGB8888;
-  hdma2d.Init.OutputOffset = 0;
-  hdma2d.LayerCfg[1].InputOffset = 0;
-  hdma2d.LayerCfg[1].InputColorMode = DMA2D_INPUT_ARGB8888;
-  hdma2d.LayerCfg[1].AlphaMode = DMA2D_NO_MODIF_ALPHA;
-  hdma2d.LayerCfg[1].InputAlpha = 0;
-  if (HAL_DMA2D_Init(&hdma2d) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_DMA2D_ConfigLayer(&hdma2d, 1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN DMA2D_Init 2 */
+	for(;;)
+	{
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
 
-  /* USER CODE END DMA2D_Init 2 */
+	  memcpy(xStructsToSend[3].u8QUE_TxBufer, u8QUE_TxBuf, TAM);
 
+	  xStatus = xQueueSendToBack( myQueue01Handle, argument, xDelay386ms );
+
+	  vTaskDelayUntil( &xLastWakeTime, xDelay386ms );
+
+	  if( xStatus != pdPASS )
+	  {
+	  /* The send operation could not complete because the queue was full -
+	  this must be an error as the queue should never contain more than
+	  one item! */
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Could not send to the queue.\r\n",strlen("Could not send to the queue.\r\n"),100);
+		//HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
+	  }
+	  else{
+		  //HAL_UART_Transmit(&huart1, (uint8_t*)"Temperature was sending correctly.\r\n",strlen("Was sending correctly.\r\n"),100);
+	  }
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 0); // 0 turn Off
+	}
 }
 
-/**
-  * @brief I2C3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C3_Init(void)
+/* USER CODE END Header_StartTask03. Caudal, ID = 0x3 */
+void vSendTask_Caudal(void *argument)
 {
+	TickType_t xLastWakeTime;
+	const TickType_t xDelay400ms = pdMS_TO_TICKS( 400 ); //10_02_2025 with 390 goes to Error_Handler.
+	BaseType_t xStatus;
+	uint8_t u8QUE_TxBuf[TAM] = {0};
 
-  /* USER CODE BEGIN I2C3_Init 0 */
+	uint8_t u8I2C_RX_Buf_102[TAM] = {0}; // DATA to receive by I2C address = 102
+	uint8_t u8I2C_TX_Buffer[2] = {82,13};  //Request\r
 
-  /* USER CODE END I2C3_Init 0 */
+	HAL_StatusTypeDef StatusI2C = HAL_BUSY;
 
-  /* USER CODE BEGIN I2C3_Init 1 */
+	xLastWakeTime = xTaskGetTickCount();
+	memset(u8QUE_TxBuf,CLEAR_BUFFER_CH, TAM);
 
-  /* USER CODE END I2C3_Init 1 */
-  hi2c3.Instance = I2C3;
-  hi2c3.Init.ClockSpeed = 100000;
-  hi2c3.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c3.Init.OwnAddress1 = 0;
-  hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c3.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c3.Init.OwnAddress2 = 0;
-  hi2c3.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c3.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c3) != HAL_OK)
-  {
-    Error_Handler();
-  }
+	memset(u8I2C_RX_Buf_102,CLEAR_BUFFER_CH, TAM);
 
-  /** Configure Analogue filter
-  */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c3, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-  {
-    Error_Handler();
-  }
+	//memcpy(u8QUE_TxBuf,"Caudal", sizeof("Caudal"));
 
-  /** Configure Digital filter
-  */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c3, 0) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C3_Init 2 */
+	u8QUE_TxBuf[TAM - 2] = 13;
+	u8QUE_TxBuf[TAM - 1] = '\n';
 
-  /* USER CODE END I2C3_Init 2 */
+	for(;;)
+	{
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
 
+		if(HAL_I2C_Master_Transmit(&hi2c1,TMP102_ADDR,u8I2C_TX_Buffer,1,1000)!= HAL_OK)
+		{
+			Error_Handler();
+		}
+
+		memset(u8I2C_RX_Buf_102,CLEAR_BUFFER_CH, TAM);
+
+		vTaskDelayUntil( &xLastWakeTime, xDelay400ms );
+
+		StatusI2C = HAL_I2C_Master_Receive(&hi2c1 ,TMP102_ADDR, (uint8_t *)u8I2C_RX_Buf_102, 8,1000);
+
+		if(StatusI2C == HAL_BUSY)
+		{
+			HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, 1); // turn ON Blue
+			Error_Handler();
+		}
+		else{
+			if(StatusI2C == HAL_TIMEOUT)
+			{
+				HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // turn ON yellow
+				Error_Handler();
+			}
+		}
+
+		memcpy(xStructsToSend[2].u8QUE_TxBufer, u8I2C_RX_Buf_102, TAM);
+
+		xStatus = xQueueSendToBack( myQueue01Handle, argument, xDelay400ms );
+
+		if( xStatus != pdPASS )
+		{
+		/* The send operation could not complete because the queue was full - this must be an error as
+		 * the queue should never contain more than one item! */
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Could not send to the queue.\r\n",strlen("Could not send to the queue.\r\n"),100);
+		//HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
+		}
+		else{
+		  //HAL_UART_Transmit(&huart1, (uint8_t*)"Caudal was sending correctly.\r\n",strlen("Was sending correctly.\r\n"),100);
+		}
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 0); // 0 turn Off
+	}
 }
 
-/**
-  * @brief LTDC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_LTDC_Init(void)
+
+void vSendTask_Redox(void *argument)
 {
+	TickType_t xLastWakeTime;
+	const TickType_t xDelay386ms = pdMS_TO_TICKS( 392 );
+	BaseType_t xStatus;
+	uint8_t u8QUE_TxBuf[TAM] = {0};
 
-  /* USER CODE BEGIN LTDC_Init 0 */
+	xLastWakeTime = xTaskGetTickCount();
+	memset(u8QUE_TxBuf,CLEAR_BUFFER_CH, TAM);
 
-  /* USER CODE END LTDC_Init 0 */
+	memcpy(u8QUE_TxBuf," Redox", sizeof("Redox"));
 
-  LTDC_LayerCfgTypeDef pLayerCfg = {0};
+	u8QUE_TxBuf[TAM - 2] = 13;
+	u8QUE_TxBuf[TAM - 1] = '\n';
 
-  /* USER CODE BEGIN LTDC_Init 1 */
+	for(;;)
+	{
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
 
-  /* USER CODE END LTDC_Init 1 */
-  hltdc.Instance = LTDC;
-  hltdc.Init.HSPolarity = LTDC_HSPOLARITY_AL;
-  hltdc.Init.VSPolarity = LTDC_VSPOLARITY_AL;
-  hltdc.Init.DEPolarity = LTDC_DEPOLARITY_AL;
-  hltdc.Init.PCPolarity = LTDC_PCPOLARITY_IPC;
-  hltdc.Init.HorizontalSync = 9;
-  hltdc.Init.VerticalSync = 1;
-  hltdc.Init.AccumulatedHBP = 29;
-  hltdc.Init.AccumulatedVBP = 3;
-  hltdc.Init.AccumulatedActiveW = 269;
-  hltdc.Init.AccumulatedActiveH = 323;
-  hltdc.Init.TotalWidth = 279;
-  hltdc.Init.TotalHeigh = 327;
-  hltdc.Init.Backcolor.Blue = 0;
-  hltdc.Init.Backcolor.Green = 0;
-  hltdc.Init.Backcolor.Red = 0;
-  if (HAL_LTDC_Init(&hltdc) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  pLayerCfg.WindowX0 = 0;
-  pLayerCfg.WindowX1 = 240;
-  pLayerCfg.WindowY0 = 0;
-  pLayerCfg.WindowY1 = 320;
-  pLayerCfg.PixelFormat = LTDC_PIXEL_FORMAT_RGB565;
-  pLayerCfg.Alpha = 255;
-  pLayerCfg.Alpha0 = 0;
-  pLayerCfg.BlendingFactor1 = LTDC_BLENDING_FACTOR1_PAxCA;
-  pLayerCfg.BlendingFactor2 = LTDC_BLENDING_FACTOR2_PAxCA;
-  pLayerCfg.FBStartAdress = 0xD0000000;
-  pLayerCfg.ImageWidth = 240;
-  pLayerCfg.ImageHeight = 320;
-  pLayerCfg.Backcolor.Blue = 0;
-  pLayerCfg.Backcolor.Green = 0;
-  pLayerCfg.Backcolor.Red = 0;
-  if (HAL_LTDC_ConfigLayer(&hltdc, &pLayerCfg, 0) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN LTDC_Init 2 */
+	  memcpy(xStructsToSend[4].u8QUE_TxBufer, u8QUE_TxBuf, TAM);
 
-  /* USER CODE END LTDC_Init 2 */
+	  xStatus = xQueueSendToBack( myQueue01Handle, argument, xDelay386ms );
 
+	  vTaskDelayUntil( &xLastWakeTime, xDelay386ms );
+
+	  if( xStatus != pdPASS )
+	  {
+	  /* The send operation could not complete because the queue was full -
+	  this must be an error as the queue should never contain more than
+	  one item! */
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Could not send to the queue.\r\n",strlen("Could not send to the queue.\r\n"),100);
+		//HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
+	  }
+	  else{
+		  //HAL_UART_Transmit(&huart1, (uint8_t*)"Temperature was sending correctly.\r\n",strlen("Was sending correctly.\r\n"),100);
+	  }
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 0); // 0 turn Off
+	}
 }
 
-/**
-  * @brief SPI5 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI5_Init(void)
+void vSendTask_Humed(void *argument)
 {
+	TickType_t xLastWakeTime;
+	const TickType_t xDelay400ms = pdMS_TO_TICKS( 400 );
+	BaseType_t xStatus;
+	uint8_t u8QUE_TxBuf[TAM] = {0};
 
-  /* USER CODE BEGIN SPI5_Init 0 */
+	xLastWakeTime = xTaskGetTickCount();
+	memset(u8QUE_TxBuf,CLEAR_BUFFER_CH, TAM);
 
-  /* USER CODE END SPI5_Init 0 */
+	memcpy(u8QUE_TxBuf," Humidity", sizeof("Humidity"));
 
-  /* USER CODE BEGIN SPI5_Init 1 */
+	u8QUE_TxBuf[TAM - 2] = 13;
+	u8QUE_TxBuf[TAM - 1] = '\n';
 
-  /* USER CODE END SPI5_Init 1 */
-  /* SPI5 parameter configuration*/
-  hspi5.Instance = SPI5;
-  hspi5.Init.Mode = SPI_MODE_MASTER;
-  hspi5.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi5.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi5.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi5.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi5.Init.NSS = SPI_NSS_SOFT;
-  hspi5.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
-  hspi5.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi5.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi5.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi5.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi5) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI5_Init 2 */
+	for(;;)
+	{
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
 
-  /* USER CODE END SPI5_Init 2 */
+	  memcpy(xStructsToSend[5].u8QUE_TxBufer, u8QUE_TxBuf, TAM);
 
+	  xStatus = xQueueSendToBack( myQueue01Handle, argument, xDelay400ms );
+
+	  vTaskDelayUntil( &xLastWakeTime, xDelay400ms );
+
+	  if( xStatus != pdPASS )
+	  {
+	  /* The send operation could not complete because the queue was full -
+	  this must be an error as the queue should never contain more than
+	  one item! */
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Could not send to the queue.\r\n",strlen("Could not send to the queue.\r\n"),100);
+		//HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
+	  }
+	  else{
+		  //HAL_UART_Transmit(&huart1, (uint8_t*)"Temperature was sending correctly.\r\n",strlen("Was sending correctly.\r\n"),100);
+	  }
+	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 0); // 0 turn Off
+	}
 }
 
-/**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM1_Init(void)
+
+void vReceivTask_HMI(void *argument)
 {
+	Data_t xReceivedStructure;
+	const TickType_t xDelay320ms = pdMS_TO_TICKS( 320 ); //180 was ok but get empty once
+	BaseType_t xStatus;
+	BaseType_t NumDataQueue = 0;
+	uint8_t u8QUE_RxBuf[TAM] = {0};
 
-  /* USER CODE BEGIN TIM1_Init 0 */
+	memset(u8QUE_RxBuf,CLEAR_BUFFER_CH, TAM);
 
-  /* USER CODE END TIM1_Init 0 */
+	for(;;)
+	{
+	  NumDataQueue = uxQueueMessagesWaiting( myQueue01Handle );
+	  if( NumDataQueue > 128 )
+	  {
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Queue should have been empty!\r\n",strlen("Queue should have been empty!\r\n"),100);
+	  }
+	  //vTaskDelayUntil( &xLastWakeTime, xDelay120ms ); //Goes to blocked state, but GPIO keeps ON
+													  //GPIO goes to off until pass 120ms
+	  //xStatus = xQueueReceive( myQueue01Handle, &xReceivedStructure, 0 );
+	  xStatus = xQueueReceive( myQueue01Handle, &xReceivedStructure, xDelay320ms );
 
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
+	  if( xStatus == pdPASS )
+	  {
+		  /* Data was successfully received from the queue, print out the received value. */
+		  u8QUE_RxBuf[TAM - 2] = 13;
+		  u8QUE_RxBuf[TAM - 1] = '\n';
 
-  /* USER CODE BEGIN TIM1_Init 1 */
+		  switch(xReceivedStructure.eDataSource)
+		  {
+		  	  case eSender1_Ph:
+				  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, 1); // 0 turn ON
 
-  /* USER CODE END TIM1_Init 1 */
-  htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM1_Init 2 */
+				  HAL_UART_Transmit(&huart1, (uint8_t*)"\n\r From Sender 1 Ph = ",strlen("\n\r From Sender 1 Ph = "),200);
 
-  /* USER CODE END TIM1_Init 2 */
+				  if(HAL_UART_Transmit(&huart1, (uint8_t *)xReceivedStructure.u8QUE_TxBufer, sizeof(xReceivedStructure.u8QUE_TxBufer), 200)!= HAL_OK)
+				  {
+					Error_Handler();
+				  }
+				  break;
 
+		  	  case eSender2_Temp:
+				  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 1); // 0 turn ON
+				  HAL_UART_Transmit(&huart1, (uint8_t*)"\n\r From Sender 2 Temperature = ",strlen("\n\r From Sender 2 Temperature = "),200);
+
+				  if(HAL_UART_Transmit(&huart1, (uint8_t *)xReceivedStructure.u8QUE_TxBufer, sizeof(xReceivedStructure.u8QUE_TxBufer), 200)!= HAL_OK)
+				  {
+					Error_Handler();
+				  }
+				  break;
+
+		  	  case eSender3_Caudal:
+				  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, 1); // 0 turn ON
+				  HAL_UART_Transmit(&huart1, (uint8_t*)"\n\r From Sender 3 Caudal = ",strlen("\n\r From Sender 3 Caudal = "),200);
+
+				  if(HAL_UART_Transmit(&huart1, (uint8_t *)xReceivedStructure.u8QUE_TxBufer, sizeof(xReceivedStructure.u8QUE_TxBufer), 200)!= HAL_OK)
+				  {
+					Error_Handler();
+				  }
+				  break;
+
+		  	  case eSender4_Conduct:
+				  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, 1); // 0 turn ON
+				  HAL_UART_Transmit(&huart1, (uint8_t*)"\n\r From Sender 4 Conduct = ",strlen("\n\r From Sender 4 Conduct = "),200);
+
+				  if(HAL_UART_Transmit(&huart1, (uint8_t *)xReceivedStructure.u8QUE_TxBufer, sizeof(xReceivedStructure.u8QUE_TxBufer), 200)!= HAL_OK)
+				  {
+					Error_Handler();
+				  }
+				  break;
+
+		  	  case eSender5_Redox:
+				  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, 1); // 0 turn ON
+				  HAL_UART_Transmit(&huart1, (uint8_t*)"\n\r From Sender 5 Redox = ",strlen("\n\r From Sender 5 Redox = "),200);
+
+				  if(HAL_UART_Transmit(&huart1, (uint8_t *)xReceivedStructure.u8QUE_TxBufer, sizeof(xReceivedStructure.u8QUE_TxBufer), 200)!= HAL_OK)
+				  {
+					Error_Handler();
+				  }
+				  break;
+
+		  	  case eSender6_Humed:
+		  		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, 1); // 0 turn ON
+				  HAL_UART_Transmit(&huart1, (uint8_t*)"\n\r From Sender 6 Humidity = ",strlen("\n\r From Sender 6 Humidity = "),200);
+
+				  if(HAL_UART_Transmit(&huart1, (uint8_t *)xReceivedStructure.u8QUE_TxBufer, sizeof(xReceivedStructure.u8QUE_TxBufer), 200)!= HAL_OK)
+				  {
+					Error_Handler();
+				  }
+				  break;
+
+		  	  default:
+		  		HAL_UART_Transmit(&huart1, (uint8_t*)"Could not receive from the queue.\r\n",strlen("Could not receive from the queue.\r\n"),100);
+		  		break;
+		  }
+
+	  }
+	  else{
+	  /* Data was not received from the queue even after waiting for 100ms.
+	  This must be an error as the sending tasks are free running and will be
+	  continuously writing to the queue. */
+		  HAL_UART_Transmit(&huart1, (uint8_t*)"Could not receive from the queue.\r\n",strlen("Could not receive from the queue.\r\n"),100);
+	  }
+
+	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, 0); // 0 turn Off
+
+	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, 0); // 0 turn OFF
+	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 0); // 0 turn OFF
+
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, 0); // 0 turn OFF
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, 0); // 0 turn OFF
+	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, 0); // 0 turn OFF
+
+	  memset(u8QUE_RxBuf,CLEAR_BUFFER_CH, TAM);
+	}
 }
 
-/**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
+void vCyclic_ErrorHan(void *argument)
 {
+	TickType_t xLastWakeTime;
+	const TickType_t xDelay4s = pdMS_TO_TICKS( 4000 );
 
-  /* USER CODE BEGIN USART1_Init 0 */
+	xLastWakeTime = xTaskGetTickCount();
 
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
+	for(;;)
+	{
+		HAL_UART_Transmit(&huart1, (uint8_t*)"\n\r Error Handler task (4s)\r\n",strlen("\n\r Error Handler task (4s)\r\n"),100);
+		vTaskDelayUntil( &xLastWakeTime, xDelay4s );
+	}
 }
 
-/* FMC initialization function */
-static void MX_FMC_Init(void)
-{
 
-  /* USER CODE BEGIN FMC_Init 0 */
-
-  /* USER CODE END FMC_Init 0 */
-
-  FMC_SDRAM_TimingTypeDef SdramTiming = {0};
-
-  /* USER CODE BEGIN FMC_Init 1 */
-
-  /* USER CODE END FMC_Init 1 */
-
-  /** Perform the SDRAM1 memory initialization sequence
-  */
-  hsdram1.Instance = FMC_SDRAM_DEVICE;
-  /* hsdram1.Init */
-  hsdram1.Init.SDBank = FMC_SDRAM_BANK2;
-  hsdram1.Init.ColumnBitsNumber = FMC_SDRAM_COLUMN_BITS_NUM_8;
-  hsdram1.Init.RowBitsNumber = FMC_SDRAM_ROW_BITS_NUM_12;
-  hsdram1.Init.MemoryDataWidth = FMC_SDRAM_MEM_BUS_WIDTH_16;
-  hsdram1.Init.InternalBankNumber = FMC_SDRAM_INTERN_BANKS_NUM_4;
-  hsdram1.Init.CASLatency = FMC_SDRAM_CAS_LATENCY_3;
-  hsdram1.Init.WriteProtection = FMC_SDRAM_WRITE_PROTECTION_DISABLE;
-  hsdram1.Init.SDClockPeriod = FMC_SDRAM_CLOCK_PERIOD_2;
-  hsdram1.Init.ReadBurst = FMC_SDRAM_RBURST_DISABLE;
-  hsdram1.Init.ReadPipeDelay = FMC_SDRAM_RPIPE_DELAY_1;
-  /* SdramTiming */
-  SdramTiming.LoadToActiveDelay = 2;
-  SdramTiming.ExitSelfRefreshDelay = 7;
-  SdramTiming.SelfRefreshTime = 4;
-  SdramTiming.RowCycleDelay = 7;
-  SdramTiming.WriteRecoveryTime = 3;
-  SdramTiming.RPDelay = 2;
-  SdramTiming.RCDDelay = 2;
-
-  if (HAL_SDRAM_Init(&hsdram1, &SdramTiming) != HAL_OK)
-  {
-    Error_Handler( );
-  }
-
-  /* USER CODE BEGIN FMC_Init 2 */
-
-  /* USER CODE END FMC_Init 2 */
-}
-
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-/* USER CODE BEGIN MX_GPIO_Init_1 */
-/* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOF_CLK_ENABLE();
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOG_CLK_ENABLE();
-  __HAL_RCC_GPIOE_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, NCS_MEMS_SPI_Pin|CSX_Pin|OTG_FS_PSO_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(ACP_RST_GPIO_Port, ACP_RST_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, RDX_Pin|WRX_DCX_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOG, LD3_Pin|LD4_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pins : NCS_MEMS_SPI_Pin CSX_Pin OTG_FS_PSO_Pin */
-  GPIO_InitStruct.Pin = NCS_MEMS_SPI_Pin|CSX_Pin|OTG_FS_PSO_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : B1_Pin MEMS_INT1_Pin MEMS_INT2_Pin TP_INT1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin|MEMS_INT1_Pin|MEMS_INT2_Pin|TP_INT1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : ACP_RST_Pin */
-  GPIO_InitStruct.Pin = ACP_RST_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(ACP_RST_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : OTG_FS_OC_Pin */
-  GPIO_InitStruct.Pin = OTG_FS_OC_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(OTG_FS_OC_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : BOOT1_Pin */
-  GPIO_InitStruct.Pin = BOOT1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(BOOT1_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : TE_Pin */
-  GPIO_InitStruct.Pin = TE_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(TE_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : RDX_Pin WRX_DCX_Pin */
-  GPIO_InitStruct.Pin = RDX_Pin|WRX_DCX_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : LD3_Pin LD4_Pin */
-  GPIO_InitStruct.Pin = LD3_Pin|LD4_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
-
-/* USER CODE BEGIN MX_GPIO_Init_2 */
-/* USER CODE END MX_GPIO_Init_2 */
-}
-
-/* USER CODE BEGIN 4 */
-
-/* USER CODE END 4 */
-
-/* USER CODE BEGIN Header_StartDefaultTask */
-/**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void const * argument)
-{
-  /* init code for USB_HOST */
-  MX_USB_HOST_Init();
-  /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END 5 */
-}
-
-/**
-  * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM6 interrupt took place, inside
-  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
-  * a global variable "uwTick" used as application time base.
-  * @param  htim : TIM handle
-  * @retval None
-  */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-  /* USER CODE BEGIN Callback 0 */
-
-  /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM6) {
-    HAL_IncTick();
-  }
-  /* USER CODE BEGIN Callback 1 */
-
-  /* USER CODE END Callback 1 */
-}
-
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
@@ -692,6 +613,14 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
+	 HAL_GPIO_WritePin(GPIOC, GPIO_PIN_15, 0); // 0 turn Off
+
+	 HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, 0); // 0 turn OFF
+	 HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14, 0); // 0 turn OFF
+
+	 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, 0); // 0 turn OFF
+	 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, 0); // 0 turn OFF
+	 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, 0); // 0 turn OFF
   }
   /* USER CODE END Error_Handler_Debug */
 }
